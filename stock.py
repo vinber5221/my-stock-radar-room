@@ -54,13 +54,12 @@ st.sidebar.write(f"可用現金：**${st.session_state.cash:,.0f}**")
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     
-    # 側邊欄：下單設定
     st.sidebar.divider()
     st.sidebar.subheader("🛒 下單設定")
     if target_id == "TAIEX":
         st.sidebar.info("指數標的僅供參考，請切換至個股交易。")
     else:
-        # 將交易股數挪到左邊
+        # 交易股數挪到左邊
         trade_qty = st.sidebar.number_input("欲交易股數 (張=1000)", min_value=0, step=1000, value=1000)
         
         btn_buy, btn_sell = st.sidebar.columns(2)
@@ -95,8 +94,7 @@ if not df.empty:
         st.session_state.inventory = {}
         st.rerun()
 
-    # --- 4. 主畫面：數據與分析 ---
-    # 計算資產總值
+    # --- 4. 主畫面顯示 ---
     total_stock_value = 0
     for sid, info in st.session_state.inventory.items():
         price = latest_price if sid == target_id else info['cost']
@@ -110,12 +108,10 @@ if not df.empty:
     m2.metric("可用現金", f"${st.session_state.cash:,.0f}")
     m3.metric(f"{selected_label} 現價", f"${latest_price:.2f}")
 
-    # K線圖
     fig = go.Figure(data=[go.Candlestick(x=df.tail(100)['date'], open=df.tail(100)['open'], high=df.tail(100)['high'], low=df.tail(100)['low'], close=df.tail(100)['close'])])
     fig.update_layout(height=450, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=10,b=10,l=0,r=0))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 主畫面：持倉明細
     st.subheader("📋 基金持倉明細")
     if st.session_state.inventory:
         inv_list = []
@@ -133,7 +129,6 @@ if not df.empty:
     else:
         st.info("目前無持倉，請由左側面板進行下單。")
 
-    # 深度財務診斷
     if target_id != "TAIEX":
         st.divider()
         st.subheader(f"📊 {selected_label} 財務診斷")
