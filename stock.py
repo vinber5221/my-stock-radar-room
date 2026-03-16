@@ -9,28 +9,33 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_cloud_data():
     try:
-        # 強制讀取 Sheet1
+        # 讀取 Sheet1
         df = conn.read(worksheet="Sheet1", ttl=0)
         
-        if df.empty:
-            st.error("⚠️ 雲端讀取結果為空！請檢查試算表內是否有資料。")
+        if df is None or df.empty:
+            st.warning("⚠️ 雲端試算表是空的，將初始化為一千萬。")
             return 10000000.0, {}
             
-        # 顯示讀取狀態 (除錯用，成功後可刪除)
-        st.toast(f"✅ 雲端連線成功，讀取到 {len(df)} 筆資料")
-        
         df = df.dropna(subset=['type'])
-        cash_row = df[df['type'] == 'cash']
-        cash = float(cash_row['value1'].values[0]) if not cash_row.empty else 10000000.0
+        
+        # 讀取現金 (不分大小寫)
+        cash_df = df[df['type'].astype(str).str.lower() == 'cash']
+        if not cash_df.empty:
+            cash = float(cash_df['value1'].values[0])
+        else:
+            cash = 10000000.0
             
+        # 讀取持倉
         inventory = {}
-        stock_df = df[df['type'] == 'stock']
+        stock_df = df[df['type'].astype(str).str.lower() == 'stock']
         for _, row in stock_df.iterrows():
             inventory[str(row['id'])] = {"shares": int(row['value1']), "cost": float(row['value2'])}
+            
         return cash, inventory
     except Exception as e:
-        st.error(f"📡 雲端連線失敗！錯誤訊息：{e}")
-        return 10000000.0, {}
+        st.error(f"📡 讀取失敗，目前無法連線至 Google Sheets: {e}")
+        # 如果失敗，我們不給預設值，讓它報錯，這樣我們才知道問題在哪
+        return None, None
 
 def save_cloud_data(cash, inventory):
     data = [{"type": "cash", "id": "balance", "value1": cash, "value2": 0}]
@@ -38,19 +43,24 @@ def save_cloud_data(cash, inventory):
         data.append({"type": "stock", "id": sid, "value1": info['shares'], "value2": info['cost']})
     try:
         conn.update(worksheet="Sheet1", data=pd.DataFrame(data))
-        st.toast("💾 數據已同步至雲端試算表")
+        st.toast("💾 數據已存入雲端")
     except Exception as e:
         st.sidebar.error(f"❌ 存檔失敗: {e}")
 
-# --- 2. 帳戶初始化 ---
-if 'cash' not in st.session_state:
-    st.session_state.cash, st.session_state.inventory = load_cloud_data()
+# --- 2. 帳戶初始化 (強制同步) ---
+if 'cash' not in st.session_state or st.session_state.cash is None:
+    c, i = load_cloud_data()
+    if c is not None:
+        st.session_state.cash = c
+        st.session_state.inventory = i
+    else:
+        st.stop() # 如果連不到雲端就停止執行，避免歸零
 
 # --- 3. UI 介面 ---
-st.set_page_config(page_title="Vincent 1000萬永久戰情室", layout="wide")
+st.set_page_config(page_title="Vincent 1000萬雲端監控", layout="wide")
 st.sidebar.header("🕹️ 控制台")
 
-if st.sidebar.button("⚠️ 初始化雲端帳戶", type="primary", use_container_width=True):
+if st.sidebar.button("⚠️ 初始化雲端帳戶", type="primary"):
     st.session_state.cash, st.session_state.inventory = 10000000.0, {}
     save_cloud_data(10000000.0, {})
     st.rerun()
@@ -74,7 +84,7 @@ df = get_stock_data(target_id)
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     st.sidebar.divider()
-    st.sidebar.write(f"💰 目前雲端現金：**${st.session_state.cash:,.0f}**")
+    st.sidebar.write(f"💰 現金：**${st.session_state.cash:,.0f}**")
     
     if target_id != "TAIEX":
         qty = st.sidebar.number_input("交易股數", min_value=0, step=1000, value=1000)
@@ -114,6 +124,5 @@ if not df.empty:
     if st.session_state.inventory:
         inv_df = pd.DataFrame([{"標的": monitor_list.get(s, s), "股數": i['shares'], "均價": round(i['cost'], 1)} for s, i in st.session_state.inventory.items()])
         st.dataframe(inv_df, use_container_width=True, hide_index=True)
-    else: st.info("目前無持倉。")
 else:
     st.warning("數據載入中...")
