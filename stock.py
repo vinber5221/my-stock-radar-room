@@ -9,32 +9,34 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_cloud_data():
     try:
-        # 讀取 Sheet1
+        # 讀取 Sheet1，ttl=0 確保抓取最新狀態
         df = conn.read(worksheet="Sheet1", ttl=0)
         
         if df is None or df.empty:
-            st.warning("⚠️ 雲端試算表是空的，將初始化為一千萬。")
-            return 10000000.0, {}
+            st.error("❌ 雲端試算表內無數據，請確認試算表內容。")
+            return None, None
             
+        # 確保 type 欄位沒有空格且為小寫
         df = df.dropna(subset=['type'])
+        df['type'] = df['type'].astype(str).str.strip().str.lower()
         
-        # 讀取現金 (不分大小寫)
-        cash_df = df[df['type'].astype(str).str.lower() == 'cash']
+        # 讀取現金
+        cash_df = df[df['type'] == 'cash']
         if not cash_df.empty:
             cash = float(cash_df['value1'].values[0])
         else:
-            cash = 10000000.0
+            st.error("❌ 試算表中找不到 type 為 'cash' 的列")
+            return None, None
             
         # 讀取持倉
         inventory = {}
-        stock_df = df[df['type'].astype(str).str.lower() == 'stock']
+        stock_df = df[df['type'] == 'stock']
         for _, row in stock_df.iterrows():
             inventory[str(row['id'])] = {"shares": int(row['value1']), "cost": float(row['value2'])}
             
         return cash, inventory
     except Exception as e:
-        st.error(f"📡 讀取失敗，目前無法連線至 Google Sheets: {e}")
-        # 如果失敗，我們不給預設值，讓它報錯，這樣我們才知道問題在哪
+        st.error(f"📡 雲端讀取失敗：{e}")
         return None, None
 
 def save_cloud_data(cash, inventory):
@@ -42,28 +44,27 @@ def save_cloud_data(cash, inventory):
     for sid, info in inventory.items():
         data.append({"type": "stock", "id": sid, "value1": info['shares'], "value2": info['cost']})
     try:
-        conn.update(worksheet="Sheet1", data=pd.DataFrame(data))
+        new_df = pd.DataFrame(data)
+        conn.update(worksheet="Sheet1", data=new_df)
         st.toast("💾 數據已存入雲端")
     except Exception as e:
         st.sidebar.error(f"❌ 存檔失敗: {e}")
 
-# --- 2. 帳戶初始化 (強制同步) ---
-if 'cash' not in st.session_state or st.session_state.cash is None:
-    c, i = load_cloud_data()
-    if c is not None:
-        st.session_state.cash = c
-        st.session_state.inventory = i
-    else:
-        st.stop() # 如果連不到雲端就停止執行，避免歸零
+# --- 2. 帳戶初始化 (強制讀取，不成功則停止) ---
+# 每次啟動強制從雲端重新抓取，不使用預設 0
+if 'cash' not in st.session_state or st.sidebar.button("🔄 強制同步雲端"):
+    with st.spinner('同步雲端數據中...'):
+        c, i = load_cloud_data()
+        if c is not None:
+            st.session_state.cash = c
+            st.session_state.inventory = i
+        else:
+            st.warning("⚠️ 無法獲取雲端資產，請檢查連線。")
+            st.stop()
 
 # --- 3. UI 介面 ---
-st.set_page_config(page_title="Vincent 1000萬雲端監控", layout="wide")
+st.set_page_config(page_title="Vincent 1000萬雲端戰情室", layout="wide")
 st.sidebar.header("🕹️ 控制台")
-
-if st.sidebar.button("⚠️ 初始化雲端帳戶", type="primary"):
-    st.session_state.cash, st.session_state.inventory = 10000000.0, {}
-    save_cloud_data(10000000.0, {})
-    st.rerun()
 
 monitor_list = {"TAIEX": "台股大盤", "0050": "元大台灣50", "2330": "台積電", "2317": "鴻海", "2454": "聯發科"}
 selected_label = st.sidebar.selectbox("🚀 選擇標的", list(monitor_list.values()))
@@ -84,7 +85,7 @@ df = get_stock_data(target_id)
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     st.sidebar.divider()
-    st.sidebar.write(f"💰 現金：**${st.session_state.cash:,.0f}**")
+    st.sidebar.write(f"💰 目前現金：**${st.session_state.cash:,.0f}**")
     
     if target_id != "TAIEX":
         qty = st.sidebar.number_input("交易股數", min_value=0, step=1000, value=1000)
