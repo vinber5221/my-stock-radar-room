@@ -16,7 +16,7 @@ def send_line_notification(message):
     try: requests.post(url, json=payload, headers=headers)
     except: pass
 
-# --- 2. 數據核心 ---
+# --- 2. 數據核心：增加財報獲取 ---
 @st.cache_data(ttl=3600)
 def get_stock_data(stock_id, period="日線"):
     dl = DataLoader()
@@ -54,14 +54,16 @@ def get_stock_data(stock_id, period="日線"):
     df['Hist'] = (df['DIF'] - df['DEA']) * 2
     return df
 
-@st.cache_data(ttl=86400)
-def get_financial_data(stock_id):
+@st.cache_data(ttl=86400) # 財報一天抓一次即可
+def get_financial_summary(stock_id):
     if stock_id == "TAIEX": return None
     dl = DataLoader()
     try:
+        # 獲取 EPS
         eps = dl.taiwan_stock_financial_statements(stock_id=stock_id, start_date="2023-01-01")
-        eps = eps[eps['type'] == 'EPSTaxAfter']
-        rev = dl.taiwan_stock_month_revenue(stock_id=stock_id, start_date="2023-01-01")
+        eps = eps[eps['type'] == 'EPSTaxAfter'].tail(4)
+        # 獲取營收
+        rev = dl.taiwan_stock_month_revenue(stock_id=stock_id, start_date="2024-01-01").tail(4)
         return {"eps": eps, "rev": rev}
     except: return None
 
@@ -84,28 +86,29 @@ if st.sidebar.button("🔍 執行金叉掃描"):
                     hits.append(name)
         if hits:
             st.sidebar.success(f"發現訊號：{', '.join(hits)}")
-            send_line_notification(f"🔔 偵測到{scan_period}金叉：{', '.join(hits)}")
+            send_line_notification(f"🔔 Vincent 大師，偵測到{scan_period}金叉：{', '.join(hits)}")
         else: st.sidebar.info("目前暫無訊號")
 
 st.sidebar.divider()
-st.sidebar.header("💰 模擬零股試算")
+st.sidebar.header("💰 模擬投資記錄 (零股)")
 buy_price = st.sidebar.number_input("平均買入成本", min_value=0.0, value=0.0, step=0.1)
-buy_shares = st.sidebar.number_input("持有股數 (1張=1000股)", min_value=0, value=0, step=1)
+buy_shares = st.sidebar.number_input("持有股數 (e.g. 100)", min_value=0, value=0, step=1)
 
 selected_label = st.sidebar.selectbox("🚀 觀測標的", list(monitor_list.values()))
 target_id = [k for k, v in monitor_list.items() if v == selected_label][0]
 chart_period = st.sidebar.radio("📅 顯示週期", ["日線", "週線", "月線"], horizontal=True)
 
-# --- 4. 繪製圖表與財報 ---
+# --- 4. 繪製圖表與顯示數據 ---
 df = get_stock_data(target_id, chart_period)
 
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     
+    # 頂部狀態列
     c1, c2, c3 = st.columns(3)
     c1.metric(selected_label, f"{latest_price:.2f}")
     
-    # 零股損益試算邏輯
+    # 零股損益計算
     if buy_price > 0 and buy_shares > 0:
         profit = (latest_price - buy_price) * buy_shares
         profit_rate = ((latest_price / buy_price) - 1) * 100
@@ -115,27 +118,27 @@ if not df.empty:
     
     c3.metric("趨勢狀態", "🔥 金叉翻多" if df.iloc[-1]['DIF'] > df.iloc[-1]['DEA'] else "⚪ 趨勢穩定")
 
+    # K線與指標
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
-    fig.add_trace(go.Candlestick(x=df.tail(60)['date'], open=df.tail(60)['open'], high=df.tail(60)['high'], low=df.tail(60)['low'], close=df.tail(60)['close'], name='K線'), row=1, col=1)
-    fig.add_trace(go.Bar(x=df.tail(60)['date'], y=df.tail(60)['Hist'], name='MACD柱', marker_color=['red' if h >= 0 else 'green' for h in df.tail(60)['Hist']]), row=2, col=1)
+    plot_df = df.tail(60)
+    fig.add_trace(go.Candlestick(x=plot_df['date'], open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name='K線'), row=1, col=1)
+    fig.add_trace(go.Bar(x=plot_df['date'], y=plot_df['Hist'], name='MACD柱', marker_color=['red' if h >= 0 else 'green' for h in plot_df['Hist']]), row=2, col=1)
     fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
+    # 財報摘要區
     if target_id != "TAIEX":
         st.subheader(f"📊 {selected_label} 財務精華")
-        f_data = get_financial_data(target_id)
-        if f_data:
+        f_info = get_financial_summary(target_id)
+        if f_info:
             fc1, fc2 = st.columns(2)
             with fc1:
                 st.write("**近四季 EPS (稅後)**")
-                eps_df = f_data['eps'].tail(4)[['date', 'value']].copy()
-                eps_df.columns = ['季度', 'EPS']
-                st.dataframe(eps_df, hide_index=True, use_container_width=True)
+                st.table(f_info['eps'][['date', 'value']].rename(columns={'date':'季度', 'value':'EPS'}))
             with fc2:
-                st.write("**最近月營收 (百萬)**")
-                rev_df = f_data['rev'].tail(4)[['date', 'revenue']].copy()
-                rev_df['revenue'] = (rev_df['revenue'] / 1000000).round(2)
-                rev_df.columns = ['月份', '營收(百萬)']
-                st.dataframe(rev_df, hide_index=True, use_container_width=True)
+                st.write("**近四月營收 (百萬)**")
+                rev_show = f_info['rev'][['date', 'revenue']].copy()
+                rev_show['revenue'] = (rev_show['revenue'] / 1000000).round(0)
+                st.table(rev_show.rename(columns={'date':'月份', 'revenue':'營收(M)'}))
 else:
-    st.warning("資料載入中...")
+    st.warning("資料載入中，請稍候...")
