@@ -9,16 +9,27 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_cloud_data():
     try:
-        # 這裡指定讀取 Sheet1
-        df = conn.read(worksheet="Sheet1", ttl=0).dropna(subset=['type'])
-        cash = float(df[df['type'] == 'cash']['value1'].values[0])
+        # 強制讀取 Sheet1
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        
+        if df.empty:
+            st.error("⚠️ 雲端讀取結果為空！請檢查試算表內是否有資料。")
+            return 10000000.0, {}
+            
+        # 顯示讀取狀態 (除錯用，成功後可刪除)
+        st.toast(f"✅ 雲端連線成功，讀取到 {len(df)} 筆資料")
+        
+        df = df.dropna(subset=['type'])
+        cash_row = df[df['type'] == 'cash']
+        cash = float(cash_row['value1'].values[0]) if not cash_row.empty else 10000000.0
+            
         inventory = {}
         stock_df = df[df['type'] == 'stock']
         for _, row in stock_df.iterrows():
             inventory[str(row['id'])] = {"shares": int(row['value1']), "cost": float(row['value2'])}
         return cash, inventory
     except Exception as e:
-        st.error(f"📡 雲端讀取失敗，請確認分頁名稱是否為 Sheet1。錯誤：{e}")
+        st.error(f"📡 雲端連線失敗！錯誤訊息：{e}")
         return 10000000.0, {}
 
 def save_cloud_data(cash, inventory):
@@ -27,8 +38,9 @@ def save_cloud_data(cash, inventory):
         data.append({"type": "stock", "id": sid, "value1": info['shares'], "value2": info['cost']})
     try:
         conn.update(worksheet="Sheet1", data=pd.DataFrame(data))
-    except:
-        st.sidebar.warning("⚠️ 寫入失敗，請確認試算表權限為『編輯者』")
+        st.toast("💾 數據已同步至雲端試算表")
+    except Exception as e:
+        st.sidebar.error(f"❌ 存檔失敗: {e}")
 
 # --- 2. 帳戶初始化 ---
 if 'cash' not in st.session_state:
@@ -36,9 +48,9 @@ if 'cash' not in st.session_state:
 
 # --- 3. UI 介面 ---
 st.set_page_config(page_title="Vincent 1000萬永久戰情室", layout="wide")
-st.sidebar.header("🕹️ 交易控制台")
+st.sidebar.header("🕹️ 控制台")
 
-if st.sidebar.button("⚠️ 初始化帳戶 (清空雲端並回歸1000萬)", type="primary", use_container_width=True):
+if st.sidebar.button("⚠️ 初始化雲端帳戶", type="primary", use_container_width=True):
     st.session_state.cash, st.session_state.inventory = 10000000.0, {}
     save_cloud_data(10000000.0, {})
     st.rerun()
@@ -62,16 +74,15 @@ df = get_stock_data(target_id)
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     st.sidebar.divider()
-    st.sidebar.write(f"💰 雲端同步現金：**${st.session_state.cash:,.0f}**")
+    st.sidebar.write(f"💰 目前雲端現金：**${st.session_state.cash:,.0f}**")
     
     if target_id != "TAIEX":
-        qty = st.sidebar.number_input("欲交易股數", min_value=0, step=1000, value=1000)
+        qty = st.sidebar.number_input("交易股數", min_value=0, step=1000, value=1000)
         c1, c2 = st.sidebar.columns(2)
         with c1:
             if st.sidebar.button("🔴 買入", use_container_width=True):
-                cost = qty * latest_price
-                if st.session_state.cash >= cost:
-                    st.session_state.cash -= cost
+                if st.session_state.cash >= (qty * latest_price):
+                    st.session_state.cash -= (qty * latest_price)
                     if target_id in st.session_state.inventory:
                         st.session_state.inventory[target_id]['shares'] += qty
                     else: st.session_state.inventory[target_id] = {"shares": qty, "cost": latest_price}
