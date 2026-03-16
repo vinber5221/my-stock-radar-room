@@ -1,8 +1,5 @@
-streamlit
 FinMind
 plotly
 pandas
-numpy
-requests
-tqdm
-scikit-learn
+st-gsheets-connection
+gspread
