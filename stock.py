@@ -106,29 +106,48 @@ if not df.empty:
     fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=20, b=20, l=0, r=0))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 深度財務診斷區塊
+   # --- 深度財務診斷區塊 (強化防錯版) ---
     if target_id != "TAIEX":
+        st.divider()
         st.subheader(f"📊 {selected_label} 深度財務診斷")
         f_all = get_comprehensive_finance(target_id)
-        if f_all:
-            # 整理數據
-            eps = f_all['state'][f_all['state']['type'] == 'EPSTaxAfter'].tail(4)
-            gross = f_all['analysis'][f_all['analysis']['type'] == 'GrossProfitMargin'].tail(4)
-            op_margin = f_all['analysis'][f_all['analysis']['type'] == 'OperatingProfitMargin'].tail(4)
-            roe = f_all['analysis'][f_all['analysis']['type'] == 'ReturnOnEquityAftax'].tail(4)
-            
+        
+        if f_all is not None:
             c1, c2, c3, c4 = st.columns(4)
+            
+            # 1. EPS 處理
             with c1:
                 st.write("**EPS (每股盈餘)**")
-                st.table(eps[['date', 'value']].rename(columns={'date':'季度', 'value':'元'}))
+                try:
+                    eps = f_all['state'][f_all['state']['type'] == 'EPSTaxAfter'].tail(4)
+                    st.table(eps[['date', 'value']].rename(columns={'date':'季度', 'value':'元'}))
+                except: st.warning("暫無 EPS 資料")
+            
+            # 2. 毛利率 處理
             with c2:
                 st.write("**毛利率 (%)**")
-                st.table(gross[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                try:
+                    gross = f_all['analysis'][f_all['analysis']['type'] == 'GrossProfitMargin'].tail(4)
+                    st.table(gross[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                except: st.warning("暫無資料")
+
+            # 3. 營業利益率 處理
             with c3:
                 st.write("**營業利益率 (%)**")
-                st.table(op_margin[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                try:
+                    op_margin = f_all['analysis'][f_all['analysis']['type'] == 'OperatingProfitMargin'].tail(4)
+                    st.table(op_margin[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                except: st.warning("暫無資料")
+
+            # 4. ROE 處理
             with c4:
                 st.write("**ROE 報酬率 (%)**")
-                st.table(roe[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                try:
+                    roe = f_all['analysis'][f_all['analysis']['type'] == 'ReturnOnEquityAftax'].tail(4)
+                    st.table(roe[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
+                except: st.warning("暫無資料")
+        else:
+            st.info("💡 正在從 FinMind 伺服器獲取最新財報數據，請稍候約 10 秒...")
 else:
-    st.info("數據載入中，請稍候...")
+    # 這是對應最上方 get_stock_data 的 else
+    st.warning("📡 股價數據連線中，若長時間沒反應請點擊右上角 Rerun")
