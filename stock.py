@@ -81,4 +81,49 @@ buy_shares = st.sidebar.number_input("持有股數", min_value=0, value=0, step=
 monitor_list = {"TAIEX": "台股大盤", "0050": "元大台灣50", "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2382": "廣達"}
 selected_label = st.sidebar.selectbox("🚀 觀測標的", list(monitor_list.values()))
 target_id = [k for k, v in monitor_list.items() if v == selected_label][0]
-chart_period = st.sidebar.radio("📅 顯示週期", ["日線", "週線", "
+chart_period = st.sidebar.radio("📅 顯示週期", ["日線", "週線", "月線"], horizontal=True)
+
+# --- 4. 數據計算與顯示 ---
+df = get_stock_data(target_id, chart_period)
+
+if not df.empty:
+    latest_price = df.iloc[-1]['close']
+    
+    # 基金損益核心邏輯
+    current_stock_value = latest_price * buy_shares
+    cost_basis = buy_price * buy_shares
+    remaining_cash = initial_capital - cost_basis
+    total_assets = remaining_cash + current_stock_value
+    total_profit = total_assets - initial_capital
+    profit_pct = (total_profit / initial_capital) * 100 if initial_capital > 0 else 0
+
+    # 頂部三大指標
+    m1, m2, m3 = st.columns(3)
+    m1.metric("基金總資產 (淨值)", f"${total_assets:,.0f}", f"{profit_pct:.2f}%")
+    m2.metric("可用現金餘額", f"${remaining_cash:,.0f}")
+    m3.metric(f"{selected_label} 損益", f"${(current_stock_value - cost_basis):,.0f}")
+
+    # K線與指標圖
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
+    plot_df = df.tail(60)
+    fig.add_trace(go.Candlestick(x=plot_df['date'], open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name='K線'), row=1, col=1)
+    fig.add_trace(go.Bar(x=plot_df['date'], y=plot_df['Hist'], name='MACD柱', marker_color=['red' if h >= 0 else 'green' for h in plot_df['Hist']]), row=2, col=1)
+    fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=20, b=20, l=0, r=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 財報區域
+    if target_id != "TAIEX":
+        st.subheader(f"📊 {selected_label} 財務精華")
+        f_info = get_financial_summary(target_id)
+        if f_info:
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                st.write("**近四季 EPS (稅後)**")
+                st.table(f_info['eps'][['date', 'value']].rename(columns={'date':'季度', 'value':'EPS'}))
+            with fc2:
+                st.write("**近四月營收 (百萬)**")
+                rev_show = f_info['rev'][['date', 'revenue']].copy()
+                rev_show['revenue'] = (rev_show['revenue'] / 1000000).round(0)
+                st.table(rev_show.rename(columns={'date':'月份', 'revenue':'營收(M)'}))
+else:
+    st.info("數據載入中，請稍候...")
