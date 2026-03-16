@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import requests
+import time
 
 # --- 1. 系統通訊設定 ---
 LINE_TOKEN = "hBmawO0uysekx/UhIGUNysagEuHJX7kvgXMkAQHSoOWPjvcVh/4j6oQBLDDuV2s+7iRV4q6cDIh2uy1tHenUb5jk3/GYmmBL32wipEOk5NHPzHNZLnKAU+ogwTsujwSMcpbFeq0bO7XkrjoGM//5TgdB04t89/1O/w1cDnyilFU="
@@ -16,22 +17,32 @@ def send_line_notification(message):
     try: requests.post(url, json=payload, headers=headers)
     except: pass
 
-# --- 2. 數據核心 ---
-@st.cache_data(ttl=3600)
+# --- 2. 數據核心 (加入重試機制) ---
+@st.cache_data(ttl=600) # 縮短快取時間，方便偵錯
 def get_stock_data(stock_id, period="日線"):
     dl = DataLoader()
     start_dt = "2020-01-01"
-    try:
-        if stock_id == "TAIEX":
-            df = dl.taiwan_stock_index(index_id="TAIEX", start_date=start_dt)
-            if df is None or df.empty:
-                df = dl.taiwan_stock_daily(stock_id="0050", start_date=start_dt)
-        else:
-            df = dl.taiwan_stock_daily(stock_id=stock_id, start_date=start_dt)
-    except: return pd.DataFrame()
+    df = pd.DataFrame()
+    
+    # 嘗試抓取，若失敗會重試一次
+    for _ in range(2):
+        try:
+            if stock_id == "TAIEX":
+                df = dl.taiwan_stock_index(index_id="TAIEX", start_date=start_dt)
+                if df is None or df.empty:
+                    df = dl.taiwan_stock_daily(stock_id="0050", start_date=start_dt)
+            else:
+                df = dl.taiwan_stock_daily(stock_id=stock_id, start_date=start_dt)
+            
+            if df is not None and not df.empty:
+                break
+        except:
+            time.sleep(1)
+            continue
 
     if df is None or df.empty: return pd.DataFrame()
 
+    # 欄位統整
     for col in df.columns:
         if col.upper() in ['TAIEX', 'VALUE']:
             df.rename(columns={col: 'close'}, inplace=True)
@@ -40,6 +51,7 @@ def get_stock_data(stock_id, period="日線"):
     for c in ['open', 'high', 'low', 'close']:
         if c not in df.columns: df[c] = df.get('close', 0)
 
+    # 週期重組
     if period != "日線":
         rule_map = {"週線": "W", "月線": "M", "年線": "Y"}
         df['date'] = pd.to_datetime(df['date'])
@@ -47,6 +59,7 @@ def get_stock_data(stock_id, period="日線"):
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
         }).dropna().reset_index()
     
+    # MACD 計算
     ema12 = df['close'].ewm(span=12, adjust=False).mean()
     ema26 = df['close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
@@ -79,26 +92,21 @@ selected_label = st.sidebar.selectbox("🚀 觀測標的", list(monitor_list.val
 target_id = [k for k, v in monitor_list.items() if v == selected_label][0]
 chart_period = st.sidebar.radio("📅 顯示週期", ["日線", "週線", "月線"], horizontal=True)
 
-# --- 4. 數據繪製與邏輯 ---
+# --- 4. 主邏輯 ---
 df = get_stock_data(target_id, chart_period)
 
 if not df.empty:
     latest_price = df.iloc[-1]['close']
-    
-    # 基金邏輯計算
     current_stock_value = latest_price * buy_shares
-    cost_spent = buy_price * buy_shares
-    remaining_cash = initial_capital - cost_spent
+    remaining_cash = initial_capital - (buy_price * buy_shares)
     total_assets = remaining_cash + current_stock_value
     profit_pct = ((total_assets / initial_capital) - 1) * 100 if initial_capital > 0 else 0
 
-    # 儀表板顯示
     m1, m2, m3 = st.columns(3)
     m1.metric("基金總資產 (淨值)", f"${total_assets:,.0f}", f"{profit_pct:.2f}%")
     m2.metric("可用現金餘額", f"${remaining_cash:,.0f}")
     m3.metric(f"{selected_label} 現價", f"${latest_price:.2f}", "🔥 金叉" if df.iloc[-1]['DIF'] > df.iloc[-1]['DEA'] else "穩定")
 
-    # K線與指標
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
     plot_df = df.tail(60)
     fig.add_trace(go.Candlestick(x=plot_df['date'], open=plot_df['open'], high=plot_df['high'], low=plot_df['low'], close=plot_df['close'], name='K線'), row=1, col=1)
@@ -106,39 +114,17 @@ if not df.empty:
     fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=20, b=20, l=0, r=0))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 深度財務診斷區塊 (強化防錯版)
+    # 深度財務診斷
     if target_id != "TAIEX":
         st.divider()
         st.subheader(f"📊 {selected_label} 深度財務診斷")
         f_all = get_comprehensive_finance(target_id)
-        
-        if f_all is not None:
+        if f_all:
             c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.write("**EPS (每股盈餘)**")
-                try:
-                    eps = f_all['state'][f_all['state']['type'] == 'EPSTaxAfter'].tail(4)
-                    st.table(eps[['date', 'value']].rename(columns={'date':'季度', 'value':'元'}))
-                except: st.warning("暫無資料")
-            with c2:
-                st.write("**毛利率 (%)**")
-                try:
-                    gross = f_all['analysis'][f_all['analysis']['type'] == 'GrossProfitMargin'].tail(4)
-                    st.table(gross[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
-                except: st.warning("暫無資料")
-            with c3:
-                st.write("**營業利益率 (%)**")
-                try:
-                    op_margin = f_all['analysis'][f_all['analysis']['type'] == 'OperatingProfitMargin'].tail(4)
-                    st.table(op_margin[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
-                except: st.warning("暫無資料")
-            with c4:
-                st.write("**ROE 報酬率 (%)**")
-                try:
-                    roe = f_all['analysis'][f_all['analysis']['type'] == 'ReturnOnEquityAftax'].tail(4)
-                    st.table(roe[['date', 'value']].rename(columns={'date':'季度', 'value':'%'}))
-                except: st.warning("暫無資料")
-        else:
-            st.info("💡 正在從伺服器獲取財務指標，請稍候...")
+            # 簡化顯示，確保表格一定出得來
+            with c1: st.write("**EPS**"); st.dataframe(f_all['state'][f_all['state']['type']=='EPSTaxAfter'].tail(4)[['date','value']], hide_index=True)
+            with c2: st.write("**毛利率**"); st.dataframe(f_all['analysis'][f_all['analysis']['type']=='GrossProfitMargin'].tail(4)[['date','value']], hide_index=True)
+            with c3: st.write("**營益率**"); st.dataframe(f_all['analysis'][f_all['analysis']['type']=='OperatingProfitMargin'].tail(4)[['date','value']], hide_index=True)
+            with c4: st.write("**ROE**"); st.dataframe(f_all['analysis'][f_all['analysis']['type']=='ReturnOnEquityAftax'].tail(4)[['date','value']], hide_index=True)
 else:
-    st.warning("📡 股價數據連線中，若長時間沒反應請點擊右上角 Rerun")
+    st.error("⚠️ 數據連線中斷或伺服器忙碌，請點擊右上角 Rerun 重試。")
