@@ -38,7 +38,7 @@ def get_comprehensive_finance(stock_id):
 st.set_page_config(page_title="Vincent 1000萬實戰模擬", layout="wide")
 st.title("🏛️ 1,000 萬虛擬基金實戰模擬器")
 
-# --- 側邊欄：全功能控制面板 ---
+# --- 側邊欄：控制面板 ---
 st.sidebar.header("🕹️ 交易控制台")
 
 monitor_list = {"TAIEX": "台股大盤", "0050": "元大台灣50", "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2382": "廣達"}
@@ -48,23 +48,21 @@ target_id = [k for k, v in monitor_list.items() if v == selected_label][0]
 df = get_main_data(target_id)
 
 st.sidebar.divider()
-st.sidebar.subheader("💰 帳戶餘額")
-st.sidebar.write(f"可用現金：**${st.session_state.cash:,.0f}**")
+st.sidebar.write(f"💰 可用現金：**${st.session_state.cash:,.0f}**")
 
 if not df.empty:
     latest_price = df.iloc[-1]['close']
     
-    st.sidebar.divider()
     st.sidebar.subheader("🛒 下單設定")
     if target_id == "TAIEX":
-        st.sidebar.info("指數標的僅供參考，請切換至個股交易。")
+        st.sidebar.info("大盤指數僅供觀測。")
     else:
         # 交易股數挪到左邊
-        trade_qty = st.sidebar.number_input("欲交易股數 (張=1000)", min_value=0, step=1000, value=1000)
+        trade_qty = st.sidebar.number_input("欲交易股數", min_value=0, step=1000, value=1000)
         
         btn_buy, btn_sell = st.sidebar.columns(2)
         with btn_buy:
-            if st.sidebar.button("🔴 確認買入", use_container_width=True):
+            if st.sidebar.button("🔴 買入", use_container_width=True):
                 cost = trade_qty * latest_price
                 if st.session_state.cash >= cost:
                     st.session_state.cash -= cost
@@ -76,10 +74,10 @@ if not df.empty:
                     else:
                         st.session_state.inventory[target_id] = {"shares": trade_qty, "cost": latest_price}
                     st.rerun()
-                else: st.sidebar.error("資金不足")
+                else: st.sidebar.error("現金不足")
         
         with btn_sell:
-            if st.sidebar.button("🟢 確認賣出", use_container_width=True):
+            if st.sidebar.button("🟢 賣出", use_container_width=True):
                 if target_id in st.session_state.inventory and st.session_state.inventory[target_id]['shares'] >= trade_qty:
                     st.session_state.cash += trade_qty * latest_price
                     st.session_state.inventory[target_id]['shares'] -= trade_qty
@@ -118,16 +116,15 @@ if not df.empty:
         for sid, info in st.session_state.inventory.items():
             name = monitor_list.get(sid, sid)
             p = latest_price if sid == target_id else info['cost']
-            mkt_val = info['shares'] * p
             inv_list.append({
                 "標的": name,
                 "股數": info['shares'],
                 "平均成本": round(info['cost'], 2),
-                "估計市值": f"{mkt_val:,.0f}"
+                "估計市值": f"{info['shares'] * p:,.0f}"
             })
         st.dataframe(pd.DataFrame(inv_list), use_container_width=True, hide_index=True)
     else:
-        st.info("目前無持倉，請由左側面板進行下單。")
+        st.info("目前無持倉，請由左側面板下單。")
 
     if target_id != "TAIEX":
         st.divider()
